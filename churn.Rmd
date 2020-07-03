@@ -1,0 +1,369 @@
+# Customer Churn Analysis
+
+Churn analysis is the evaluation of a company’s customer loss rate in order to reduce it. It is one of the most important and challenging problems for businesses such as credit card and telecommunication companies. The full cost of churn includes both lost revenue and the marketing costs involved with replacing those customers with new ones. Statistics show that acquiring new customers can cost five times more than retaining existing customers.
+
+This customers data set is from a credit card company, where it is possible to review customer attributes such as gender, age, tenure, balance, number of products they are subscribed to, their estimated salary and if they left the company or not. In this analysis tree methods will be used to predict, which customer groups have the highest risk of churn.
+
+### 1. Dataset import and preparation
+
+The first step is to import required libraries, as well as the data set itself. The following libraries will be used: 
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+library(tibble)
+library(tree)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(tidyverse)
+library(randomForest)
+library(ipred)
+library(gbm)
+library(plyr)
+```
+
+The dataset derives from Kaggle and can can be found [here](https://www.kaggle.com/shubh0799/churn-modelling). 
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+df <- read.csv("churn.csv")
+head(df)
+```
+
+As one can see, in a raw dataset there are 11 variables. The depentent variable is *Exited*, which has two values: 1 when the customer exited and 0 otherwise. Independent variables can be described as follows:
+
+* *RowNumber* - The number of the row (unique)
+* *CustomerId* - The customer id (unique)
+* *Surname* - Customer's surname (unique)
+* *CreditScore* - Customer's credit score    
+* *Geography* - Which Country the customer belongs to (France, Spain or Germany)
+* *Gender* - Customer's Gender          
+* *Age* - Customer's Age             
+* *Tenure* - The time of bond with company (in years)
+* *Balance* - The amount left with the customer
+* *NumOfProducts* - The products the customer owns  
+* *HasCrCard* - Whether the customer has a credit card (1) or not (0)     
+* *IsActiveMember* - Whether the customer is an active member (1) or not (0)  
+* *EstimatedSalary* - Customer's estimated salary 
+
+First, non-informative columns will be deleted from the dataset (i.e. *RowNumber*, *Surname* and *CustomerId*).
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+df <- df[-c(1:3)]
+```
+
+In order to see, how the variables are encoded and what their basic statistics are, functions *glimpse()* and *summary()* are used.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+glimpse(df)
+summary(df)
+```
+
+There is no doubt that the categorical variables *Geography*, *Gender* *HasCrCard*, *IsActiveMember* and *Exited* should be encoded as factors. In terms of variables *Tenure* and *NumOfProducts* the same procedure will be applied, because these variables can take only a few, small numbers (<0,10> in case of *Tenure* and <1,4> in case of *NumOfProducts*), which can be encoded as categories.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+cols <- c("Geography","Tenure","NumOfProducts","Gender","HasCrCard",
+          "IsActiveMember","Exited")
+df[cols] <- lapply(df[cols], as.factor)
+```
+
+The dataset does not contain any missings.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+sum(is.na(df))
+```
+
+### 2. Data visualization
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+groupplot <- function(variable, xlab) {
+  ggplot(df, aes(variable, ..count..)) + 
+  geom_bar(aes(fill = Exited), position = "dodge") +
+  labs(x = xlab)
+ }
+
+densitplot <- function(variable, xlab) {
+  ggplot(df, aes(x=variable, fill=Exited)) +
+    geom_density(alpha=0.4) +
+    labs(x = xlab)
+}
+
+g1 <- groupplot(df$Geography, "Geography")
+g2 <- groupplot(df$Gender, "Gender")
+g3 <- groupplot(df$Tenure, "Tenure")
+g4 <- groupplot(df$NumOfProducts, "NumOfProducts")
+g5 <- groupplot(df$HasCrCard, "HasCrCard")
+
+d1 <- densitplot(df$CreditScore, "CreditScore")
+d2 <- densitplot(df$Age, "Age")
+d3 <- densitplot(df$Balance, "Balance")
+d4 <- densitplot(df$EstimatedSalary, "EstimatedSalary")
+
+grid.arrange(g1,g2,g3,g4,g5, nrow = 2)
+grid.arrange(d1,d2,d3,d4, nrow = 2)
+```
+
+Based on the plot it can be presumed that:
+* there are slightly less churns in Spain than in Germany and France
+* the churn rate is lower among men than women
+* the churn rate is higher among older clients
+
+### 3. Data analysis
+
+Before the very analysis starts, it is necessary to split the dataset into train, validation and test set. One splits the dataset in order to be able to compare the models of one type to one another (validation set) and the best models from each type to one another (test set). In this analysis the dataset is split into three subsets in the following proportion: 70%, 15%, 15%.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+set.seed(1)
+idx <- sample(c(1:3), size = nrow(df), 
+              replace = TRUE, prob = c(.7, .15, .15))
+train <- (1:nrow(df))[idx == 1]
+valid <- (1:nrow(df))[idx == 2]
+test <- (1:nrow(df))[idx == 3]
+```
+
+In this analysis the dataset will be analized using four tree methods: plain decicion tree, random forest, bagging and gradient boosting. Between 2 and 4 models of each type will be constructed and their prediction will be compared on the validation set within the type. The best model of each type will be chosen and their prediction compared on the test set.
+
+Due to the fact, that the aim of the company is to keep clients, who are going to leave it, the analysis focuses on the clients who have value 1 on the column *Exited*. Therefore it is more important to classify correctly all clients who are probably going to leave than to classify correctly those who are not or both groups. As a result, the comparison criterion of prediction will the sensitivity, computed as the ratio of true positive and sum of true positive and false negative. The higher the sensitivity, the better the prediction of the model is.
+
+### 3.1. Decision trees
+
+### 3.1.1. Tree 1
+
+First, a simple decision tree is constructed using **rpart()** function from the rpart library
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+tree.model.1 <- rpart(Exited~.,data = df,subset = train,
+                      method = "class",xval = 10)
+rpart.plot(tree.model.1, box.palette="RdBu", shadow.col="gray", nn=TRUE)
+s.tree.model.1 <- summary(tree.model.1)
+tree.pred.1 = predict(tree.model.1, newdata = df[valid,], type = "class")
+cm.tree.model.1 <- confusionMatrix(data = tree.pred.1, df[valid,]$Exited,
+                                   positive = "1")
+cm.tree.model.1
+```
+
+Sensitivity of the simple tree model is equal to `r cm.tree.model.1$byClass["Sensitivity"]`.
+
+### 3.1.1. Tree 2
+
+In order to gain better trade-off betweeen stability of the tree and higher purity of terminal nodes, the number of observations in terminal nodes will be set to 500.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+tree.model.2 <- rpart(Exited~.,data = df,subset = train,
+                      method = "class",xval = 10,
+                      minbucket = 500)
+
+rpart.plot(tree.model.2, box.palette="RdBu", shadow.col="gray", nn=TRUE)
+s.tree.model.2 <- summary(tree.model.2)
+tree.pred.2 = predict(tree.model.2, newdata = df[valid,], type = "class")
+cm.tree.model.2 <- confusionMatrix(data = tree.pred.2, df[valid,]$Exited,
+                                   positive = "1")
+cm.tree.model.2
+```
+
+Sensitivity of the second tree model is equal to `r cm.tree.model.1$byClass["Sensitivity"]`. In comparison, the second model is better than the first one.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+which.max(c(cm.tree.model.1$byClass["Sensitivity"],
+cm.tree.model.2$byClass["Sensitivity"]))
+```
+
+### 3.2. Random forests
+
+### 3.2.1. Random forest 1
+
+A random forest of 500 trees will be grown. **mtry** parameter will be set to 3, because there are 10 independent variables and sqrt(10) is around 3.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+forest.model.1 <- randomForest(Exited~.,data = df,subset = train,
+                               mtry = 3, ntree = 500, importance = TRUE)
+forest.pred.1 = predict(forest.model.1, newdata = df[valid,], type = "class")
+cm.forest.model.1 <- confusionMatrix(data = forest.pred.1,                                   df[valid,]$Exited, positive = "1")
+```
+
+Sensitivity of a simple random forest model is equal to `r cm.forest.model.1$byClass["Sensitivity"]`. In order to see which variables are the most important a table and a plot of variable importance will be produced:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+importance(forest.model.1)
+varImpPlot(forest.model.1) 
+```
+
+As expected before, *Age* and *NumOfProducts* have the biggest influence on the dependent variable. Therefore a stratification on the variable *NumOfProducts* will be applied.
+
+### 3.2.2. Random forest 2
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+forest.model.2 <- randomForest(Exited~.,
+                               data = df,subset = train,
+                               mtry = 3, ntree = 500, importance = TRUE, strata = NumOfProducts)
+
+forest.pred.2 = predict(forest.model.2, newdata = df[valid,], type = "class")
+cm.forest.model.2 <- confusionMatrix(data = forest.pred.2, df[valid,]$Exited,positive = "1")
+```
+
+Sensitivity of the second random forest model with stratification on variable *NumOfProducts* is equal to `r cm.forest.model.2$byClass["Sensitivity"]`, so there is an improvement. A model with stratification on variables *NumOfProducts* and *IsActiveMember* will be applied.
+
+### 3.2.3. Random forest 3
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+forest.model.3 <- randomForest(Exited~.,data = df,subset = train, mtry = 3, ntree = 500, importance = TRUE, strata = c(NumOfProducts,IsActiveMember))
+
+forest.pred.3 = predict(forest.model.3, newdata = df[valid,], type = "class")
+cm.forest.model.3 <- confusionMatrix(data = forest.pred.3, df[valid,]$Exited,
+                                     positive = "1")
+```
+
+Sensitivity of the third random forest model with stratification on variables *NumOfProducts* and *IsActiveMember* is equal to `r cm.forest.model.3$byClass["Sensitivity"]`, so the improvement is no more so crucial. Among all random forest models, the last model is the best.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+which.max(c(cm.forest.model.1$byClass["Sensitivity"],
+cm.forest.model.2$byClass["Sensitivity"],
+cm.forest.model.3$byClass["Sensitivity"]))
+```
+### 3.3. Bagging
+
+### 3.3.1. Bagging 1
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+bagging.model.1 <- bagging(Exited~.,data = df,subset = train, nbagg = 25, method = "double")
+bagging.pred.1 = predict(bagging.model.1, newdata = df[valid,], type = "class")
+cm.bagging.model.1 <- confusionMatrix(data = bagging.pred.1, df[valid,]$Exited, positive = "1")
+```
+
+Sensitivity of a simple bagging model is equal to `r cm.bagging.model.1$byClass["Sensitivity"]`. 
+
+### 3.3.2. Bagging 2
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+bagging.model.2 <- bagging(Exited~.,data = df,subset = train,
+                           nbagg = 25, method = "standard",
+                           coob = TRUE)
+
+bagging.pred.2 = predict(bagging.model.2, newdata = df[valid,], type = "class")
+cm.bagging.model.2 <- confusionMatrix(data = bagging.pred.2, df[valid,]$Exited, positive = "1")
+```
+
+Sensitivity of the second bagging model is equal to `r cm.bagging.model.2$byClass["Sensitivity"]`.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+which.max(c(cm.bagging.model.1$byClass["Sensitivity"],
+cm.bagging.model.2$byClass["Sensitivity"]))
+```
+
+### 3.4. Gradient boosting
+
+### 3.4.1. Boosting 1
+
+A simple model of gradient boosting with 5000 trees will be constructed. 
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+boosting.model.1 <- gbm(as.character(Exited)~.,data = df[train,], distribution = "bernoulli", n.trees = 5000, verbose = F)
+boosting.pred.1 <- predict(boosting.model.1, newdata = df[valid,], n.trees = 5000, type = "response")
+boosting.pred.1 <- ifelse(boosting.pred.1 >= .5, 1, 0)
+cm.boosting.model.1 <- confusionMatrix(data = factor(boosting.pred.1), factor(df[valid,]$Exited), positive = "1")
+```
+
+Sensitivity of a simple gradient boosting model is equal to `r cm.boosting.model.1$byClass["Sensitivity"]`. In order to see which variables are the most important a table and a plot of variable importance will be produced:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+summary(boosting.model.1, las = 2)
+```
+
+The variables with the highest relative influence are: `r summary(boosting.model.1, las = 2)[[1]][1:4]`. In order to avoid overfitting, a reduction of number of ensemble tree will be apllied based on the out-of-bag estimate:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ntree.opt.oob.1 <- gbm.perf(boosting.model.1, method = "OOB", plot.it = T)
+```
+
+Estimated best number of trees is `r ntree.opt.oob.1[1]` and will be applied in the next model. The number of trees computed by the **gbm.perf()** function is always underestimated, so it is better to apply a greater number of trees in the model.
+
+### 3.4.2. Boosting 2
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+boosting.model.2 <- gbm(as.character(Exited)~.,data = df[train,], distribution = "bernoulli", n.trees = 150, verbose = F)
+boosting.pred.2 <- predict(boosting.model.2, newdata = df[valid,], n.trees = 150, type = "response")
+boosting.pred.2 <- ifelse(boosting.pred.2 >= .5, 1, 0)
+cm.boosting.model.2 <- confusionMatrix(data = factor(boosting.pred.2),             factor(df[valid,]$Exited), positive = "1")
+
+```
+
+Sensitivity of the second gradient boosting model is equal to `r cm.boosting.model.2$byClass["Sensitivity"]`, so here a decrease is observed. In order not to loose predictive power, a model with interactions and minimal number of observations in terminal nodes equal to 100 will be implemented. First the optimal number of trees will be double-checked.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ntree.opt.oob.2 <- gbm.perf(boosting.model.2, method = "OOB", plot.it = T)
+```
+
+Estimated best number of trees is `r ntree.opt.oob.2[1]`, so similar to the previous one. There is no need for change in the number of trees.
+
+### 3.4.3. Boosting 3
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+boosting.model.3 <- gbm(as.character(Exited)~.,data = df[train,], distribution = "bernoulli", n.trees = 150, verbose = F, interaction.depth = 4, n.minobsinnode = 100)
+boosting.pred.3 <- predict(boosting.model.3, newdata = df[valid,], n.trees = 150, type = "response")
+boosting.pred.3 <- ifelse(boosting.pred.3 >= .5, 1, 0)
+cm.boosting.model.3 <- confusionMatrix(data = factor(boosting.pred.3), factor(df[valid,]$Exited), positive = "1")
+```
+
+Sensitivity of the third gradient boosting model is equal to `r cm.boosting.model.3$byClass["Sensitivity"]`, so there is a significant increase. Now the optimal number of trees will be double-checked.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+ntree.opt.oob.3 <- gbm.perf(boosting.model.3, method = "OOB", plot.it = T)
+```
+
+Estimated best number of trees is `r ntree.opt.oob.3[1]`, so a decrease in the number of trees may improve the predictive power.
+
+### 3.4.4. Boosting 4
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+boosting.model.4 <- gbm(as.character(Exited)~.,data = df[train,], distribution = "bernoulli", n.trees = 60, verbose = F, interaction.depth = 4, n.minobsinnode = 100)
+boosting.pred.4 <- predict(boosting.model.4, newdata = df[valid,], n.trees = 60, type = "response")
+boosting.pred.4 <- ifelse(boosting.pred.4 >= .5, 1, 0)
+cm.boosting.model.4 <- confusionMatrix(data = factor(boosting.pred.4), factor(df[valid,]$Exited), positive = "1")
+```
+
+Sensitivity of the fourth gradient boosting model is equal to `r cm.boosting.model.4$byClass["Sensitivity"]`, so unfortunately the predictive power has not been improved. In comparison, the third model of all gradient boosting models is the best one.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+which.max(c(cm.boosting.model.1$byClass["Sensitivity"],
+cm.boosting.model.2$byClass["Sensitivity"],
+cm.boosting.model.3$byClass["Sensitivity"],
+cm.boosting.model.4$byClass["Sensitivity"]))
+```
+
+### 4. Final prediction
+
+Now each best model of each type will do the prediction on a test set. Then their predictive power will be compared and the best model will be interpreted.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+tree.pred.final <- predict(tree.model.2, newdata = df[test,], type = "class")
+forest.pred.final <- predict(forest.model.1, newdata = df[test,], type = "class")
+bagging.pred.final <- predict(bagging.model.1, newdata = df[test,], type = "class")
+boosting.pred.final <- predict(boosting.model.3, newdata = df[test,], n.trees = 60, type = "response")
+
+cm.tree.model.final <- confusionMatrix(data = tree.pred.final, df[test,]$Exited, positive = "1")
+cm.forest.model.final <- confusionMatrix(data = forest.pred.final, df[test,]$Exited, positive = "1")
+cm.bagging.model.final <- confusionMatrix(data = bagging.pred.final, df[test,]$Exited, positive = "1")
+boosting.pred.final <- ifelse(boosting.pred.final >= .5, 1, 0)
+cm.boosting.model.final <- confusionMatrix(data = factor(boosting.pred.final), df[test,]$Exited, positive = "1")
+
+which.max(c(cm.tree.model.final$byClass["Sensitivity"],
+            cm.forest.model.final$byClass["Sensitivity"],
+            cm.bagging.model.final$byClass["Sensitivity"],
+            cm.boosting.model.final$byClass["Sensitivity"]))
+```
+
+The best model is the tree model No. 2 and this one will be interpreted.
+
+### 5. Interpretation
+
+The confusion matrix of the chosen tree model looks as follows:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+cm.tree.model.final$table
+```
+
+The number of true positive values is a little less than the number of false positive. It results in the sensitivity being equal to `r cm.tree.model.final$final["Sensitivity"]`. On the other hand the accuracy is relatively high, being equal to `r cm.tree.model.final$overall["Accuracy"]`. The tree lookes like this:
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+rpart.plot(tree.model.2, box.palette="RdBu", shadow.col="gray", nn=TRUE)
+```
+
+The highest risk of churn is among clients who are 42 years old or older and have 0, 1 or more than 2 products of the company. Is it highly recommended to organize a marketing campaign aiming in these clients to retain them.
