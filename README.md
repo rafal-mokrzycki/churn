@@ -4,7 +4,7 @@ Churn analysis is the evaluation of a company’s customer loss rate in order to
 
 # project
 
-In this project, the data set $churn.csv$ is being analyzed. The data set is from a credit card company, where it is possible to review customer attributes such as gender, age, tenure, balance, number of products they are subscribed to, their estimated salary and if they left the company or not. In this analysis tree methods will be used to predict, which customer groups have the highest risk of churn.
+In this project, the data set * churn.csv * is being analyzed. The data set is from a credit card company, where it is possible to review customer attributes such as gender, age, tenure, balance, number of products they are subscribed to, their estimated salary and if they left the company or not. In this analysis tree methods will be used to predict, which customer groups have the highest risk of churn.
 
 # methods
 
